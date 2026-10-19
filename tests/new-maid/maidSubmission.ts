@@ -1,11 +1,12 @@
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 import { test, expect } from '../fixtures';
 import path from 'path';
 
 /**
  * Shared helpers for the maid-onboarding tests: TC-01-01 标准提交建档 and
  * TC-01-02 不完整 / 格式错误的提交 and
- * TC-01-03 重复建档、并发提交与无法识别的资料 (flows: create-new-maid, new-maid-trigger).
+ * TC-01-03 重复建档、并发提交与无法识别的资料 and
+ * TC-01-04 引用资料回复 closed / taken / open (flows: create-new-maid, new-maid-trigger).
  *
  * sendMaidSubmissions(page, n) posts n complete submissions back to back into
  * the maid-onboarding group, each in order:
@@ -196,6 +197,93 @@ export async function revokeLastMessage(page: Page) {
     const okButton = page.getByRole('button', { name: /^(确定|OK)$/ });
     if (await okButton.isVisible({ timeout: 3000 }).catch(() => false)) await okButton.click();
     await delay();
+  });
+}
+
+/**
+ * Newest message bubble matching `filter`. Older messages are not rendered
+ * until scrolled to, so scroll the chat up step by step until one shows up.
+ */
+export async function findMessage(page: Page, filter: Parameters<Locator['filter']>[0][], maxScrolls = 40) {
+  // Skip quote-replies: they repeat the quoted message's text in their quote
+  // preview (e.g. our own "closed" reply to a profile also shows her name and
+  // height), and quoting one of those would quote the reply, not the original.
+  const quotePreview = page.locator('[data-testid="quoted-message"], [aria-label*="引用"], [aria-label*="Quoted" i]');
+  let bubble = page.locator('[data-testid="msg-container"]').filter({ hasNot: quotePreview });
+  for (const f of filter) bubble = bubble.filter(f);
+  const target = bubble.last();
+
+  const chatBody = page.locator('[data-testid="conversation-panel-body"]');
+  for (let i = 0; i < maxScrolls && (await bubble.count()) === 0; i++) {
+    await chatBody.hover();
+    await page.mouse.wheel(0, -2000);
+    await delay(1500);
+  }
+  await target.scrollIntoViewIfNeeded();
+
+  // Pin the found message by its unique data-id. Otherwise the locator is
+  // re-resolved on every use, and once we quote-reply to it, our reply (whose
+  // quote preview repeats the same name, height and photo) becomes the newest
+  // match, so a 2nd quote-reply would target the reply instead.
+  const id = await target.locator('xpath=ancestor::*[@role="row"][1]').locator('[data-id]').first()
+    .getAttribute('data-id', { timeout: 5000 })
+    .catch(() => null);
+  if (!id) return target;
+  return page.getByRole('row')
+    .filter({ has: page.locator(`[data-id="${id}"]`) })
+    .first()
+    .locator('[data-testid="msg-container"]')
+    .first();
+}
+
+/**
+ * Profile message of a maid: the photo whose caption is her short bio (name +
+ * height). The full-bio text also has her name and height, so require the
+ * photo itself -- sent media render as <img src="blob:...">, unlike the emoji
+ * images inside text bubbles.
+ */
+export async function findProfileMessage(page: Page, maidName: string) {
+  return findMessage(page, [
+    { hasText: maidName },
+    { hasText: /\d+\s*cm/i },
+    { has: page.locator('img[src^="blob:"]') },
+  ]);
+}
+
+/**
+ * TC-01-04: submit a fresh test maid, wait until the bot has created her
+ * profile, and return her profile message for quote-replies.
+ */
+export async function createMaidForQuote(page: Page) {
+  const maid = buildTestMaid('Test Availability');
+  await submitMaid(page, maid);
+  // Let the bot finish creating the profile (availability = 1).
+  await delay(120000);
+  return findProfileMessage(page, maid.name);
+}
+
+/** Quote-reply ("回复" / "Reply") to a message bubble with `text`. */
+export async function quoteReply(page: Page, bubble: Locator, text: string) {
+  await test.step(`Quote-reply "${text}"`, async () => {
+    // WhatsApp's virtualized list can re-render mid-click and close the
+    // just-opened menu, so retry (as in preSalesChat.spec.ts). Explicit
+    // timeouts make a missing message fail fast instead of waiting until the
+    // whole test times out.
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await bubble.scrollIntoViewIfNeeded({ timeout: 15000 });
+        // Right-click the bubble itself, not the row (see revokeLastMessage).
+        await bubble.click({ button: 'right', timeout: 15000 });
+        await page.getByRole('menuitem', { name: /^(回复|Reply)$/ }).click({ timeout: 5000 });
+        break;
+      } catch (err) {
+        if (attempt === 3) throw err;
+        await page.keyboard.press('Escape').catch(() => {});
+        await delay(1500);
+      }
+    }
+    await delay(1000);
+    await sendText(page, text);
   });
 }
 
