@@ -36,6 +36,8 @@ export type LeadFormOptions = {
   email?: string;
   /** Q2 nationality checkboxes. */
   nationalities?: string[];
+  /** Q16 main duties checkboxes. */
+  duties?: string[];
   /** Q17 special preferences (required; "NIL" = no special preference). */
   q17?: string;
   /** Override any text answer, keyed by the question text used to find it. */
@@ -63,6 +65,8 @@ const defaultTextAnswers: Record<TextQuestion, string> = {
   'Name of liaising person': 'NIL',
 };
 
+export const defaultDuties = ['Housework', 'Childcare/ Babycare', 'Cooking', 'Pets Care'];
+
 const tag = () => Math.floor(1000 + Math.random() * 9000);
 
 /** Random made-up Singapore mobile number, 8 digits starting with 9 (not a real employer). */
@@ -84,6 +88,7 @@ export async function submitLeadForm(page: Page, options: LeadFormOptions) {
     countryCode = sgCountryCode,
     email = 'qa-test@example.com',
     nationalities = ['Myanmar only'],
+    duties = defaultDuties,
     q17 = 'Singapore experienced only. Age 25 to 40.',
   } = options;
   const answers = { ...defaultTextAnswers, ...options.textAnswers };
@@ -134,7 +139,7 @@ export async function submitLeadForm(page: Page, options: LeadFormOptions) {
     await page.getByLabel("Ok with handphone only during helper's meal breaks and after working hours (Recommended)", { exact: false }).click();
     await delay();
 
-    for (const duty of ['Housework', 'Childcare/ Babycare', 'Cooking', 'Pets Care']) {
+    for (const duty of duties) {
       await page.getByRole('checkbox', { name: duty }).click();
       await delay();
     }
